@@ -1,0 +1,254 @@
+---
+title: "Creative Data Visualization"
+format: html
+editor: visual
+---
+
+## Creating a microglia garden
+
+My work partially involves the effects of bile acid signaling on driving neuroinflammation in brain regions like the cortex, hippocampus, and cerebellum. One way that I do this is tracing the somas (cell bodies) of microglia, the innate immune cell of the brain. When these cells detect a pro-inflammatory signal these cell bodies will swell up. This is detected by a significant difference in the traced area of the soma. To visualize this in a creative way, I have taken my soma size data from my treatment groups and turned then into flowers to make a garden of the results. The color of the flowers will represent the size of the soma to show that AOM treatment increases soma size, but by knocking out the FXR receptor on neurons, we attenuate it!
+
+Important notes:
+
+FXR: a bile acid receptor on neurons thought to drive neuroinflammation when signaling. Mice in the FXR groups indicate they express FXR receptors on neurons.
+
+FXRSC: Crelox recombinase mice with the FXR receptor knocked out, so these neurons do not express FXR. SC refers to SNAP25, a vesicle docking protein involved in neurotransmitter exocytosis, which makes this knockout specific to neurons and will not affect FXR receptors found on other cell types.
+
+AOM: azoxymethane; compound used to induce the disease state.
+
+The hypothesis for this project was that FXR signaling in disease increases neuroinflammation, reflected by an increased microglial soma size. However, by ablating the neuronal FXR (the FXRSC group) these somas should be protected from swelling. This would show that FXR signaling plays a role in microglial activation and swelling, and thus has a role in driving neuroinflammation in the induced disease state.
+
+Loading in the data set ("Microglia Soma Size CSV.csv" in the repository). For context, these soma sizes were recorded by staining tissue sections from brains of treated mice (cerebellum, cortex, and hippocampus) via immunohistochemistry with Iba1; a well documented marker for microglia. 10 pictures per mouse for each brain region were taken at 40x resolution and manual soma size tracing and recording was performed in ImageJ. The soma size recorded in the CSV is the average over those 10 photos for that individual mouse. This data set includes both males and females (unlabeled) as a previous T test with this data showed there was no significant different between sexes across all groups. This data is my own and unpublished, but is soon to be submitted within the manuscript "Selective ablation of FXR is neuroprotective in a rodent model of acute liver failure" to the Journal of Neurochemistry!
+
+```{r}
+library(tidyverse)
+url <- "https://raw.githubusercontent.com/kathrynnrhodes/CreativeDataVisualization/refs/heads/main/Microglia%20Soma%20Size%20CSV.csv" #URL for the raw link, so no need to clone the CSV down to your local computer for viewing :)
+microglia_soma_size <- read.csv(url, header = TRUE)
+view(microglia_soma_size) #should have 3 columns (brain region, treatment, and soma size) and list in your environment as 100 obs. of 14 variables
+
+#Checking the data structure to make sure two columns are characters (Brain.region and Treatment) and one is numeric (Soma.size).
+summary(microglia_soma_size)
+```
+
+Fix up the data so it will work better for making the garden. When running the code, I found that the white space in the "Treatment" column was causing issues in recognizing treatment groups besides "FXR", so in this chunk we trim the white space.
+
+```{r}
+library(dplyr)
+microglia_soma_size <- microglia_soma_size %>%
+  mutate(Treatment = trimws(Treatment))
+```
+
+Now we will make the function that will generate our flowers based on our soma size data.
+
+```{r}
+library(ggforce)
+generate_flower_points <- function(x_center, y_center, size, petals = 8) {
+  #Scale size for visualization
+  size <- size / 15
+  soma <- tibble(
+    x = x_center,
+    y = y_center,
+    size = size * 0.4, #Soma as center of the flower
+    type = "soma"
+  )
+  angles <- seq(0, 2*pi, length.out = petals + 1)[1:petals] #This chunk will create the flower petals
+  processes <- tibble(
+    petal_num = 1:petals,
+    angle = angles,
+    x = x_center + cos(angles) * size,
+    y = y_center + sin(angles) * size,
+    size = size * 0.25, 
+    type = "process"
+  )
+  bind_rows(soma, processes)
+}
+
+#Because we dont have microglia process (the branches that come out from the soma to detect the chemotaxic signals), we are using aribtrary data. If you did have this data in your data frame, you would assign petals <- length("process_length") and proceed with the x and y portion of the code by swapping "size" for "process_lengths".
+```
+
+Now we make the plot positions for our flowers based on our brain region these microglia soma sizes were recorded in.
+
+```{r}
+#Creating grid positions with explicit spacing between groups
+microglia_grid_new <- microglia_soma_size %>%
+  #First, create a coordinate for each unique combination
+  group_by(Brain.region, Treatment) %>%
+  mutate(
+    cells_in_group = n(),#Counting number of cells in this group (should be 8-9 per treatment group in each region)
+    cell_id = row_number(),#Create a unique ID within each group for grid positioning
+    #Calculating grid dimensions
+    cols_per_group = ceiling(sqrt(cells_in_group)),
+    rows_per_group = ceiling(cells_in_group / cols_per_group),
+    
+    #Calculating the cell position within group
+    col_within_group = ((cell_id - 1) %% cols_per_group) + 1,
+    row_within_group = ceiling(cell_id / cols_per_group),
+    
+    #Set the positions within the group (100 units apart so we don't overlap)
+    x_within_group = col_within_group * 100,
+    y_within_group = row_within_group * 100
+  ) %>%
+  ungroup()
+
+#Now we will position each treatment + region group in a separate location
+#First, get unique treatment-region combinations
+treatment_regions <- unique(microglia_grid_new[, c("Brain.region", "Treatment")])
+
+#Create a grid for treatment-region groups (4 columns max)
+treatment_regions$group_id <- 1:nrow(treatment_regions)
+treatment_regions$group_col <- ((treatment_regions$group_id - 1) %% 4) + 1
+treatment_regions$group_row <- ceiling(treatment_regions$group_id / 4)
+
+#Add these group positions back to the main data
+microglia_grid_new <- merge(microglia_grid_new, treatment_regions, by=c("Brain.region", "Treatment"))
+
+#Calculate final positions with large spacing between groups (1000 units)
+microglia_grid_new <- microglia_grid_new %>%
+  mutate(
+    #Final positions - adding group position (1000 units apart) to within-group position
+    x_position = x_within_group + (group_col - 1) * 1000,
+    y_position = y_within_group + (group_row - 1) * 1000
+  )
+
+#Checking the new positions to make sure all treatment groups are present in each separate brain region without overlap in the final garden.
+microglia_grid_new %>%
+  group_by(Brain.region, Treatment) %>%
+  summarize(
+    min_x = min(x_position),
+    max_x = max(x_position),
+    min_y = min(y_position),
+    max_y = max(y_position),
+    .groups = "drop"
+  )
+
+#Generate flower points with new positions
+flower_points_new <- pmap_dfr(
+  microglia_grid_new %>% select(x_position, y_position, Soma.size),
+  function(x_position, y_position, Soma.size) {
+    flower_df <- generate_flower_points(x_position, y_position, Soma.size)
+    flower_df$Soma.size <- Soma.size
+    return(flower_df)
+  }
+)
+
+#Add treatment and region info
+flower_points_new <- flower_points_new %>%
+  left_join(
+    microglia_grid_new %>% select(x_position, y_position, Treatment, Brain.region),
+    by = c("x" = "x_position", "y" = "y_position")
+  )
+```
+
+Now to make our garden plot :)
+
+```{r}
+#First, let's create a complete plot with all brain regions and treatments
+#Create garden with our coordinates
+microglia_garden <- ggplot() +
+  #Adding individual, separate gardens for each brain region + treatment combo
+  geom_rect(
+    data = microglia_grid_new %>% 
+      group_by(Brain.region, Treatment) %>%
+      summarize(
+        min_x = min(x_position) - 150,
+        max_x = max(x_position) + 150,
+        min_y = min(y_position) - 150,
+        max_y = max(y_position) + 150,
+        .groups = "drop"
+      ),
+    aes(xmin = min_x, xmax = max_x, ymin = min_y, ymax = max_y, fill = Brain.region),
+    alpha = 0.2,
+    color = "black"
+  ) +
+  #Use a separate scale for labeling brain regions
+  scale_fill_brewer(palette = "Set3", name = "Brain Region") +
+  
+  #Add in the treatment labels for each group
+  geom_label(
+    data = microglia_grid_new %>% 
+      group_by(Brain.region, Treatment) %>%
+      summarize(
+        x = mean(x_position),
+        y = min(y_position) - 200,  #Positioned below groups
+        .groups = "drop"
+      ),
+    aes(x = x, y = y, label = Treatment),
+    fontface = "bold",
+    size = 4,
+    fill = "white"
+  ) +
+  
+  #Add brain region labels above each group
+  geom_label(
+    data = microglia_grid_new %>% 
+      group_by(Brain.region, Treatment) %>%
+      summarize(
+        x = min(x_position),
+        y = mean(y_position) + 300,  #Position above
+        .groups = "drop"
+      ),
+    aes(x = x, y = y, label = Brain.region),
+    fontface = "bold",
+    size = 4,
+    fill = "white"
+  ) +
+  
+  #Add the flower points to the gardens
+  geom_circle(
+    data = flower_points_new,
+    aes(x0 = x, y0 = y, r = size, color = Soma.size, alpha = type),
+    fill = "white"
+  ) +
+  
+  #Add color scale for soma size indication based on our soma size data
+  scale_color_viridis_c(
+    option = "plasma",
+    name = "Soma Size (μm²)"
+  ) +
+  
+  scale_alpha_manual(
+    values = c("soma" = 0.8, "process" = 0.6),
+    guide = "none"
+  ) +
+  
+  #Theme settings to label our title and subtitle
+  theme_void() +
+  labs(
+    title = "Microglia Garden: Visualizing Soma Size Across Brain Regions",
+    subtitle = paste("Data from", length(unique(microglia_soma_size$Treatment)), 
+                    "treatments across", length(unique(microglia_soma_size$Brain.region)), "brain regions")
+  ) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5, size = 16),
+    plot.subtitle = element_text(hjust = 0.5, size = 12),
+    plot.margin = margin(50, 50, 50, 50)
+  ) +
+  coord_fixed() +
+  #Ensure that we see all groups when this gets printed
+  expand_limits(
+    x = c(min(microglia_grid_new$x_position) - 300, max(microglia_grid_new$x_position) + 300),
+    y = c(min(microglia_grid_new$y_position) - 300, max(microglia_grid_new$y_position) + 300)
+  )
+
+#Print the garden to view!
+print(microglia_garden)
+
+#Here is a traditional plot with the same data so you can see how we have transformed the results from the original data set into a garden :)
+traditional_plot <- ggplot(microglia_soma_size, 
+       aes(x = Treatment, y = Soma.size, fill = Treatment)) +
+  geom_boxplot(alpha = 0.7) +
+  geom_point(position = position_jitter(width = 0.2), alpha = 0.5, size = 3) +
+  facet_wrap(~Brain.region, scales = "free_y") +
+  theme_minimal() +
+  labs(
+    title = "Statistical Comparison of Microglia Soma Size",
+    y = "Soma Size (μm²)",
+    x = "Treatment Group"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(traditional_plot)
+```
+
+You now have a beautiful garden of microglia to observe how the ablation of neuronal FXR can prevent the increase in soma size after AOM treatment.
